@@ -1,6 +1,26 @@
 import { Keypair } from '@stellar/stellar-sdk';
-import { GameAdapter, GameOutcome, DisputeEvidence, TransactionResult } from '../core/GameAdapter';
-import { WagrSDK } from '../core/WagrSDK';
+import { GameAdapter, GameOutcome, DisputeEvidence, TransactionResult } from '../../core/GameAdapter';
+import { WagrSDK } from '../../core/WagrSDK';
+
+interface LichessPlayer {
+  user?: { name: string; id: string };
+  id?: string;
+  rating?: number;
+}
+
+interface LichessGame {
+  id: string;
+  status: string;
+  winner?: 'white' | 'black';
+  pgn: string;
+  fen?: string;
+  moves?: string;
+  clock?: unknown;
+  players: {
+    white: LichessPlayer;
+    black: LichessPlayer;
+  };
+}
 
 export interface LichessAdapterConfig {
   lichessApiUrl?: string;
@@ -35,11 +55,11 @@ export class LichessAdapter implements GameAdapter {
         throw new Error(`Game not found: ${gameId}`);
       }
 
-      const game = await response.json();
+      const game = (await response.json()) as LichessGame;
 
       // Map Lichess game to GameOutcome
-      const winner = game.players.white.user?.name || game.players.white.id;
-      const loser = game.players.black.user?.name || game.players.black.id;
+      const winner = game.players.white.user?.name || game.players.white.id || '';
+      const loser = game.players.black.user?.name || game.players.black.id || '';
       const reason = this.getWinReason(game);
 
       return {
@@ -108,7 +128,7 @@ export class LichessAdapter implements GameAdapter {
         throw new Error(`Game not found: ${gameId}`);
       }
 
-      const game = await response.json();
+      const game = (await response.json()) as LichessGame;
 
       return {
         gameState: {
@@ -149,7 +169,7 @@ export class LichessAdapter implements GameAdapter {
     throw new Error(`Game ${gameId} did not finish within timeout`);
   }
 
-  private getWinReason(game: any): string {
+  private getWinReason(game: LichessGame): string {
     if (game.status === 'mate') {
       return 'checkmate';
     } else if (game.status === 'resign') {
@@ -162,8 +182,8 @@ export class LichessAdapter implements GameAdapter {
     return 'unknown';
   }
 
+  /** Ed25519-sign the canonical outcome data; returns a base64-encoded signature. */
   private signOutcome(outcome: GameOutcome, keypair: Keypair): string {
-    // Simple signature of outcome data
     const data = JSON.stringify({
       gameId: outcome.gameId,
       winner: outcome.winner,
@@ -172,7 +192,6 @@ export class LichessAdapter implements GameAdapter {
       timestamp: outcome.timestamp,
     });
 
-    // In production, use proper signing (e.g., Ed25519)
-    return keypair.publicKey().slice(0, 20);
+    return keypair.sign(Buffer.from(data)).toString('base64');
   }
 }

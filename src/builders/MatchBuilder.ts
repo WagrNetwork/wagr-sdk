@@ -1,6 +1,4 @@
-// Feature 1: Match Creation Builder - Fluent API for creating matches
-
-import { Keypair } from '@stellar/stellar-sdk';
+// Fluent API for constructing match configuration objects.
 
 export interface MatchConfig {
   player1: string;

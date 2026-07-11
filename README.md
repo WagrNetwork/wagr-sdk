@@ -1,6 +1,6 @@
 # Wagr SDK
 
-[![npm](https://img.shields.io/npm/v/@stellar/wagr-sdk)](https://www.npmjs.com/package/@stellar/wagr-sdk)
+[![npm](https://img.shields.io/npm/v/@wagrnetwork/wagr-sdk)](https://www.npmjs.com/package/@wagrnetwork/wagr-sdk)
 [![TypeScript](https://img.shields.io/badge/typescript-5.0-blue)](https://www.typescriptlang.org/)
 [![Soroban](https://img.shields.io/badge/soroban-protocol-purple)](https://soroban.stellar.org/)
 
@@ -10,9 +10,13 @@ TypeScript SDK for Wagr Protocol — orchestrate matches, submit results via gam
 
 Wagr SDK provides:
 
-1. **WagrSDK** — Core client for creating matches, querying state, and managing settlements
-2. **Adapter Interface** — Standardized pattern for result ingestion from any game platform
-3. **Built-in Adapters** — Lichess (M1), Chess.com (M2), Manual (M2)
+1. **WagrSDK** — Core client wrapping the escrow, resolver, and payout contracts
+2. **GameAdapter interface** — Standardized pattern for result ingestion from any game platform
+3. **Lichess adapter** — Built-in adapter for chess games played on Lichess
+
+`WagrSDK` uses `@stellar/stellar-sdk`'s `contract.Client`, which reads each
+contract's method spec directly from the chain. There is no separate
+code-generation step to keep in sync with the deployed contracts.
 
 ### Architecture
 
@@ -29,7 +33,7 @@ Stellar Blockchain
 ## Installation
 
 ```bash
-npm install @stellar/wagr-sdk @stellar/stellar-sdk
+npm install @wagrnetwork/wagr-sdk @stellar/stellar-sdk
 ```
 
 ## Quick Start
@@ -37,7 +41,7 @@ npm install @stellar/wagr-sdk @stellar/stellar-sdk
 ### Basic Setup
 
 ```ts
-import { WagrSDK } from '@stellar/wagr-sdk';
+import { WagrSDK } from '@wagrnetwork/wagr-sdk';
 import { Networks } from '@stellar/stellar-sdk';
 
 const sdk = new WagrSDK({
@@ -45,394 +49,178 @@ const sdk = new WagrSDK({
   resolverContractId: 'CB...',
   payoutContractId: 'CC...',
   rpcUrl: 'https://soroban-testnet.stellar.org',
-  networkPassphrase: Networks.TESTNET_NETWORK_PASSPHRASE,
+  networkPassphrase: Networks.TESTNET,
 });
 ```
 
-### Create a Match
+### Create and join a match
+
+Matches don't have a separate "create" step on-chain — a match exists once
+its first player stakes into escrow (2–8 players per match are supported).
 
 ```ts
 import { Keypair } from '@stellar/stellar-sdk';
 
 const player1 = Keypair.fromSecret(process.env.PLAYER1_SECRET!);
-const player2Address = 'G...';
+const player2 = Keypair.fromSecret(process.env.PLAYER2_SECRET!);
 
-const match = await sdk.createMatch(
+const created = await sdk.createMatch(
   {
     player1: player1.publicKey(),
-    player2: player2Address,
-    amount: '10000000', // 1 XLM (7 decimals)
-    asset: 'CD...', // XLM asset contract
+    player2: player2.publicKey(),
+    amount: '10000000', // stroops (1 XLM = 10,000,000 stroops)
+    asset: 'CD...', // token contract id
     gameType: 'lichess',
     gameId: 'abc123def456',
   },
   player1,
 );
 
-console.log('Match ID:', match.matchId);
-console.log('Status:', match.status); // 'pending' | 'failed'
+if (created.status === 'failed') throw new Error(created.error);
+const matchId = created.data!.matchId;
+
+await sdk.joinMatch(matchId, player2.publicKey(), '10000000', 'CD...', player2);
 ```
 
-### Submit Result (Auto)
+### Submit a result via the Lichess adapter
 
 ```ts
-import { LichessAdapter } from '@stellar/wagr-sdk/adapters/lichess';
+import { LichessAdapter } from '@wagrnetwork/wagr-sdk';
 
 const adapter = new LichessAdapter(sdk);
+const outcome = await adapter.getGameResult('abc123def456');
+const result = await adapter.submitResult(outcome, oracleKeypair);
 
-// Auto-fetches from Lichess API and submits to resolver
-const result = await adapter.submitResult(
-  { gameId: 'abc123def456' },
-  oracleKeypair,
-);
-
-console.log('Result submitted:', result.txHash);
+if (result.status === 'failed') throw new Error(result.error);
 ```
 
-### Dispute & Finalize
+### Dispute and finalize
 
 ```ts
-// Player 2 can dispute during 24h window
-const dispute = await sdk.disputeResult(
-  {
-    matchId: match.matchId,
-    evidence: {
-      screenshotUrl: 'https://...',
-      explanation: 'Invalid move on turn 15',
-    },
-  },
-  player2Keypair,
+// The recorded loser can dispute during the 24h window. The resolver
+// contract requires the loser's own signature — `signer` must be them.
+await sdk.disputeResult(
+  { matchId, evidence: 'Invalid move accepted on turn 15' },
+  player2,
 );
 
-// After dispute window (or if no dispute), finalize
-const final = await sdk.finalizeMatch(match.matchId);
+// After the dispute window closes, anyone can finalize (they just pay the tx fee).
+const final = await sdk.finalizeMatch(matchId, player1);
 console.log('Winner:', final.winner);
-console.log('Amount:', final.amount);
+
+// Settlement is a separate step, gated to the payout contract's arbiter.
+await sdk.settleWinnerTakeAll(matchId, final.winner, '20000000', 'CD...', arbiterKeypair);
 ```
 
-### Withdraw Winnings
+### Withdraw winnings
 
 ```ts
 const withdrawal = await sdk.withdrawWinnings(
-  {
-    matchId: match.matchId,
-    winner: player1.publicKey(),
-  },
+  { matchId, player: player1.publicKey(), asset: 'CD...' },
   player1,
 );
-
-console.log('Withdrawn:', withdrawal.txHash);
+console.log('Withdrawn (stroops):', withdrawal.data);
 ```
 
-## Adapter Interface
+## Adapter interface
 
 Implement this interface to add support for any game platform:
 
 ```ts
 interface GameAdapter {
-  /**
-   * Fetch game result from platform API.
-   * Throw if game not found or result is ambiguous.
-   */
+  /** Fetch game result from the platform API. Throw if not found/ambiguous. */
   getGameResult(gameId: string): Promise<GameOutcome>;
 
-  /**
-   * Sign and submit result to resolver contract.
-   */
-  submitResult(
-    outcome: GameOutcome,
-    keypair: Keypair,
-  ): Promise<TransactionResult>;
+  /** Sign and submit the result via the SDK. */
+  submitResult(outcome: GameOutcome, keypair: Keypair): Promise<TransactionResult>;
 
-  /**
-   * Provide evidence for dispute resolution.
-   * Called if a player disputes the result.
-   */
+  /** Provide evidence for dispute resolution. */
   handleDispute(gameId: string): Promise<DisputeEvidence>;
-}
-
-interface GameOutcome {
-  gameId: string;
-  winner: string; // G-address or username
-  loser: string;
-  reason: string; // 'checkmate', 'resignation', 'timeout', etc
-  timestamp: number;
-  proof?: Record<string, unknown>; // adapter-specific metadata
-}
-
-interface DisputeEvidence {
-  gameState: Record<string, unknown>; // final board state, move log, etc
-  moveLog: string[]; // PGN or similar
-  verification: Record<string, unknown>; // any additional proof
 }
 ```
 
-## Built-in Adapters
-
-### Lichess Adapter
+### Lichess adapter
 
 ```ts
-import { LichessAdapter } from '@stellar/wagr-sdk/adapters/lichess';
+import { LichessAdapter } from '@wagrnetwork/wagr-sdk';
 
 const adapter = new LichessAdapter(sdk, {
   lichessApiUrl: 'https://lichess.org/api',
-  pollInterval: 5000, // poll every 5s
+  pollInterval: 5000, // ms, used by pollForResult()
 });
 
-const result = await adapter.getGameResult('abc123def456');
-// → { winner: 'player1', loser: 'player2', reason: 'checkmate' }
+const outcome = await adapter.getGameResult('abc123def456');
+// → { gameId, winner, loser, reason: 'checkmate' | 'resignation' | ..., proof: { pgn, elo, timeControl } }
 
-const txResult = await adapter.submitResult(result, oracleKeypair);
+await adapter.submitResult(outcome, oracleKeypair);
 ```
 
-**Coverage:** Chess, public API, no auth required. Status: M1 (stable).
+Only Lichess is implemented today. To support another platform (Chess.com,
+manual self-report, etc.), implement `GameAdapter` yourself — see the
+example below.
 
-### Chess.com Adapter
+## API reference
 
-```ts
-import { ChesscomAdapter } from '@stellar/wagr-sdk/adapters/chesscom';
-
-const adapter = new ChesscomAdapter(sdk, {
-  chesscomApiUrl: 'https://www.chess.com/api',
-});
-
-const result = await adapter.getGameResult('player1-vs-player2-uuid');
-```
-
-**Coverage:** Chess, public API, requires manual account linking. Status: M2 (planned).
-
-### Manual Adapter
-
-```ts
-import { ManualAdapter } from '@stellar/wagr-sdk/adapters/manual';
-
-const adapter = new ManualAdapter(sdk);
-
-// For games with no API (COD, Fortnite, Street Fighter, etc)
-const result = await adapter.submitResult(
-  {
-    gameId: 'match-123',
-    winner: 'player1',
-    loser: 'player2',
-    evidence: {
-      screenshotUrl: 'https://...',
-      description: 'Victory screen shows player1 as winner',
-    },
-  },
-  submitterKeypair,
-);
-
-// Player 2 can dispute with their own evidence
-```
-
-**Coverage:** Any game, self-report + 24h dispute window. Status: M2 (planned).
-
-## API Reference
-
-### WagrSDK
-
-#### createMatch
-
-```ts
-createMatch(
-  options: CreateMatchOptions,
-  signer: Keypair,
-): Promise<TransactionResult<Match>>
-```
-
-Creates a new match. Player 1 stakes and awaits Player 2 stake. Returns match ID or error.
-
-#### submitResult
-
-```ts
-submitResult(
-  matchId: string,
-  outcome: GameOutcome,
-  signer: Keypair,
-): Promise<TransactionResult>
-```
-
-Direct result submission (without adapter). Used by oracles or custom logic.
-
-#### disputeResult
-
-```ts
-disputeResult(
-  options: DisputeOptions,
-  signer: Keypair,
-): Promise<TransactionResult>
-```
-
-File a dispute during the 24h window. Must include evidence.
-
-#### finalizeMatch
-
-```ts
-finalizeMatch(matchId: string): Promise<MatchOutcome>
-```
-
-Query whether dispute window has closed and result is final. Throws if not finalized.
-
-#### withdrawWinnings
-
-```ts
-withdrawWinnings(
-  options: WithdrawalOptions,
-  signer: Keypair,
-): Promise<TransactionResult>
-```
-
-Transfer winner's payout to their account.
-
-#### getMatch
-
-```ts
-getMatch(matchId: string): Promise<Match>
-```
-
-Query match details (players, amount, status, created_at).
-
-#### getPlayerMatches
-
-```ts
-getPlayerMatches(
-  playerAddress: string,
-  filter?: { status: 'active' | 'completed' | 'disputed' },
-): Promise<Match[]>
-```
-
-List all matches for a player.
-
-#### getDisputeStatus
-
-```ts
-getDisputeStatus(matchId: string): Promise<DisputeStatus>
-```
-
-Query dispute details (status, evidence, resolution).
-
-### Error Handling
-
-All mutating methods return `TransactionResult`:
+All mutating `WagrSDK` methods return a `TransactionResult` and never throw —
+check `status` instead:
 
 ```ts
 interface TransactionResult<T = unknown> {
-  status: 'pending' | 'failed' | 'success';
+  status: 'success' | 'failed';
   hash?: string;
   error?: string;
   data?: T;
 }
 ```
 
-Never throws. Always check `status`:
+Read-only queries (`getMatch`, `getFeeBalance`, `getTotalEscrow`,
+`getDisputeStatus`) throw a `ContractCallError` on RPC/contract failure.
+
+| Method | Contract | Notes |
+|---|---|---|
+| `createMatch(options, signer)` | escrow | Generates a match ID, stakes player1 |
+| `joinMatch(matchId, player, amount, asset, signer)` | escrow | Stakes an additional player (2–8 total) |
+| `timeoutRefund(matchId, player, asset, signer)` | escrow | Refund after 24h if the match never finalized |
+| `getMatch(matchId)` | escrow + resolver | Players, stakes, and result status |
+| `getTotalEscrow()` | escrow | Total currently held across all matches |
+| `submitResult(matchId, outcome, signer)` | resolver | Direct submission without an adapter |
+| `disputeResult({matchId, evidence}, signer)` | resolver | `signer` must be the recorded loser |
+| `finalizeMatch(matchId, submitter)` | resolver | Callable by anyone once the window closes |
+| `getDisputeStatus(matchId)` | resolver | Status + latest evidence, if any |
+| `settleWinnerTakeAll(...)` / `settleSplit(...)` | payout | Arbiter-only |
+| `withdrawWinnings({matchId, player, asset}, signer)` | payout | |
+| `withdrawFees(asset, signer)` | payout | Fee collector-only |
+| `getFeeBalance(asset)` | payout | |
+| `getClient(name, signer?)` | any | Raw `contract.Client` for admin ops (`pause`, `set_admin`, `upgrade`, …) not otherwise wrapped |
+| `subscribeToEvents(options)` / `stopEventSubscription()` | all | Polls `getEvents` and emits `'event'` / `'error'` |
+
+## Custom adapter example
 
 ```ts
-const result = await sdk.createMatch(options, player1);
-
-if (result.status === 'failed') {
-  console.error('Match creation failed:', result.error);
-} else if (result.status === 'pending') {
-  console.log('Submitted, poll for confirmation:', result.hash);
-} else {
-  console.log('Match created:', result.data.matchId);
-}
-```
-
-Read-only methods throw on RPC/contract error:
-
-```ts
-try {
-  const match = await sdk.getMatch('match-uuid');
-} catch (err) {
-  console.error('Query failed:', err);
-}
-```
-
-## Examples
-
-### End-to-End Match (Lichess)
-
-```ts
-import { WagrSDK, LichessAdapter } from '@stellar/wagr-sdk';
+import { GameAdapter, GameOutcome, DisputeEvidence } from '@wagrnetwork/wagr-sdk';
 import { Keypair } from '@stellar/stellar-sdk';
 
-const sdk = new WagrSDK({ /* config */ });
-const player1 = Keypair.fromSecret(process.env.PLAYER1_SECRET!);
-const player2Addr = 'G...';
-
-// 1. Create match
-const match = await sdk.createMatch(
-  {
-    player1: player1.publicKey(),
-    player2: player2Addr,
-    amount: '10000000',
-    asset: 'CD...',
-    gameType: 'lichess',
-    gameId: 'abc123def456',
-  },
-  player1,
-);
-console.log('✓ Match created:', match.matchId);
-
-// 2. Players play on Lichess (off-chain)
-console.log('→ Players play game...');
-await new Promise(resolve => setTimeout(resolve, 5000));
-
-// 3. Submit result
-const adapter = new LichessAdapter(sdk);
-const result = await adapter.submitResult(
-  { gameId: 'abc123def456' },
-  player1, // oracle keypair
-);
-console.log('✓ Result submitted:', result.txHash);
-
-// 4. Wait for finalization (or dispute window)
-await new Promise(resolve => setTimeout(resolve, 2000));
-const final = await sdk.finalizeMatch(match.matchId);
-console.log('✓ Match finalized, winner:', final.winner);
-
-// 5. Withdraw
-const withdrawal = await sdk.withdrawWinnings(
-  { matchId: match.matchId, winner: player1.publicKey() },
-  player1,
-);
-console.log('✓ Winnings withdrawn:', withdrawal.txHash);
-```
-
-### Custom Adapter (Street Fighter Tournament)
-
-```ts
-import { GameAdapter, GameOutcome } from '@stellar/wagr-sdk';
-
 class StreetFighterAdapter implements GameAdapter {
-  async getGameResult(matchId: string): Promise<GameOutcome> {
-    const result = await fetch(
-      `https://sfapi.example.com/matches/${matchId}`,
-    ).then(r => r.json());
+  constructor(private sdk: WagrSDK) {}
 
+  async getGameResult(matchId: string): Promise<GameOutcome> {
+    const result = await fetch(`https://sfapi.example.com/matches/${matchId}`).then(r => r.json());
     return {
       gameId: matchId,
       winner: result.winner,
       loser: result.loser,
       reason: result.winCondition,
       timestamp: result.endedAt,
-      proof: {
-        replayUrl: result.replayUrl,
-        finalRound: result.finalRound,
-      },
+      proof: { replayUrl: result.replayUrl, finalRound: result.finalRound },
     };
   }
 
   async submitResult(outcome: GameOutcome, keypair: Keypair) {
-    // Sign and submit to resolver
     return this.sdk.submitResult(outcome.gameId, outcome, keypair);
   }
 
   async handleDispute(gameId: string): Promise<DisputeEvidence> {
-    const replay = await fetch(
-      `https://sfapi.example.com/matches/${gameId}/replay`,
-    ).then(r => r.json());
-
+    const replay = await fetch(`https://sfapi.example.com/matches/${gameId}/replay`).then(r => r.json());
     return {
       gameState: replay.finalState,
       moveLog: replay.inputLog,
@@ -448,15 +236,7 @@ class StreetFighterAdapter implements GameAdapter {
 npm test
 ```
 
-Run specific test suite:
-```bash
-npm test -- adapter.lichess
-npm test -- match-lifecycle
-```
-
 ## Configuration
-
-Set environment variables in `.env`:
 
 ```
 SOROBAN_RPC_URL=https://soroban-testnet.stellar.org
@@ -465,8 +245,6 @@ ESCROW_CONTRACT_ID=CA...
 RESOLVER_CONTRACT_ID=CB...
 PAYOUT_CONTRACT_ID=CC...
 ```
-
-Or pass to constructor:
 
 ```ts
 const sdk = new WagrSDK({
@@ -480,7 +258,7 @@ const sdk = new WagrSDK({
 
 ## Contributing
 
-Issues and PRs welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md).
+Issues and PRs welcome.
 
 ## License
 
@@ -488,5 +266,5 @@ MIT
 
 ## Related
 
-- [wagr-contracts](https://github.com/stellar/wagr-contracts) — Core Soroban smart contracts
-- [wagr-app](https://github.com/stellar/wagr-app) — Frontend for match lobby and UI
+- [wagr-contracts](https://github.com/WagrNetwork/wagr-contracts) — Core Soroban smart contracts
+- [wagr-app](https://github.com/WagrNetwork/wagr-app) — Frontend for match lobby and UI
