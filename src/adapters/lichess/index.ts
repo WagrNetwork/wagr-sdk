@@ -1,6 +1,6 @@
 import { Keypair } from '@stellar/stellar-sdk';
-import { GameAdapter, GameOutcome, DisputeEvidence, TransactionResult } from '../../core/GameAdapter';
-import { WagrSDK } from '../../core/WagrSDK';
+import { GameAdapter, GameOutcome, DisputeEvidence, TransactionResult } from '../../core/GameAdapter.js';
+import { WagrSDK } from '../../core/WagrSDK.js';
 
 interface LichessPlayer {
   user?: { name: string; id: string };
