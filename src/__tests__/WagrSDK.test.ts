@@ -199,3 +199,40 @@ describe('WagrSDK match lifecycle', () => {
     expect(nextSigned).toBe(true);
   });
 });
+
+describe('WagrSDK oracle and dispute administration', () => {
+  it('setOracle calls resolver.set_oracle with a signed transaction', async () => {
+    const sdk = new WagrSDK(baseConfig);
+    const admin = Keypair.random();
+
+    const result = await sdk.setOracle('GORACLE', true, admin);
+
+    expect(result.status).toBe('success');
+    expect(calls).toEqual([{ method: 'set_oracle', args: { oracle: 'GORACLE', enabled: true } }]);
+    expect(nextSigned).toBe(true);
+  });
+
+  it('resolveDispute returns the final winner from the resolver', async () => {
+    const sdk = new WagrSDK(baseConfig);
+    nextResult = 'GLOSER';
+
+    const outcome = await sdk.resolveDispute('m1', 'GLOSER', Keypair.random());
+
+    expect(outcome).toEqual({ matchId: 'm1', winner: 'GLOSER' });
+    expect(calls[0]).toEqual({ method: 'resolve_dispute', args: { match_id: 'm1', winner: 'GLOSER' } });
+  });
+
+  it('isOracle and getMatchAsset are read-only queries', async () => {
+    const sdk = new WagrSDK(baseConfig);
+
+    nextResult = true;
+    expect(await sdk.isOracle('GORACLE')).toBe(true);
+    nextResult = undefined;
+    expect(await sdk.getMatchAsset('m1')).toBeNull();
+    nextResult = 'CASSET';
+    expect(await sdk.getMatchAsset('m1')).toBe('CASSET');
+
+    expect(calls.map((c) => c.method)).toEqual(['is_oracle', 'get_match_asset', 'get_match_asset']);
+    expect(nextSigned).toBe(false);
+  });
+});
