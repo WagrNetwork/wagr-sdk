@@ -3,10 +3,10 @@ import {
   contract,
   rpc,
 } from '@stellar/stellar-sdk';
-import { ContractCallError, ConfigError } from '../utils/errors';
-import { EventEmitter } from './event-emitter';
-import { retry } from '../adapters/retry';
-import type { GameOutcome } from './GameAdapter';
+import { ContractCallError, ConfigError } from '../utils/errors.js';
+import { EventEmitter } from './event-emitter.js';
+import { retry } from '../adapters/retry.js';
+import type { GameOutcome } from './GameAdapter.js';
 
 export type { GameOutcome };
 
