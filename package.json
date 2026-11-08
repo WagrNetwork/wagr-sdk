@@ -1,7 +1,7 @@
 {
   "name": "@wagrnetwork/wagr-sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for Wagr Protocol — match orchestration and result adapters",
+  "description": "TypeScript SDK for Wagr Protocol \u2014 match orchestration and result adapters",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,7 +20,8 @@
     "test:ui": "vitest --ui",
     "lint": "eslint src --ext .ts,.tsx",
     "type-check": "tsc --noEmit",
-    "dev": "vitest --watch"
+    "dev": "vitest --watch",
+    "prepare": "tsc"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^12.0.0"
@@ -37,10 +38,9 @@
     "wagr",
     "soroban",
     "stellar",
-    "wagering",
     "escrow",
-    "chess",
-    "gaming"
+    "settlement",
+    "oracle"
   ],
   "author": "Wagr Protocol Contributors",
   "license": "MIT",

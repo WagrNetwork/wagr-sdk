@@ -1,10 +1,10 @@
 # Wagr SDK
 
-[![npm](https://img.shields.io/npm/v/@wagrnetwork/wagr-sdk)](https://www.npmjs.com/package/@wagrnetwork/wagr-sdk)
+[![CI](https://github.com/WagrNetwork/wagr-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/WagrNetwork/wagr-sdk/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/typescript-5.0-blue)](https://www.typescriptlang.org/)
 [![Soroban](https://img.shields.io/badge/soroban-protocol-purple)](https://soroban.stellar.org/)
 
-TypeScript SDK for Wagr Protocol — orchestrate matches, submit results via game adapters, and settle outcomes on Soroban.
+TypeScript SDK for Wagr Protocol: trustless escrow, oracle-reported results and on-chain settlement for competitive matches on Stellar. Stake into escrow, report outcomes through game adapters (Lichess built in), and settle on Soroban.
 
 ## Overview
 
@@ -32,8 +32,10 @@ Stellar Blockchain
 
 ## Installation
 
+The package is not on npm yet; install it from GitHub (it builds on install):
+
 ```bash
-npm install @wagrnetwork/wagr-sdk @stellar/stellar-sdk
+npm install github:WagrNetwork/wagr-sdk @stellar/stellar-sdk
 ```
 
 ## Quick Start
