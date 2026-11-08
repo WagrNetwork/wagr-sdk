@@ -315,6 +315,42 @@ export class WagrSDK extends EventEmitter {
     }
   }
 
+  /**
+   * Decide a disputed result. Only the resolver admin may call this. `winner`
+   * must be one of the two recorded players; naming the original loser flips
+   * the result. The result is final immediately.
+   */
+  async resolveDispute(matchId: string, winner: string, adminSigner: Signer): Promise<MatchOutcome> {
+    const finalWinner = await this.invoke<string>(
+      'resolver',
+      'resolve_dispute',
+      { match_id: matchId, winner },
+      adminSigner,
+    );
+    return { matchId, winner: finalWinner };
+  }
+
+  /** Register (`enabled = true`) or remove a result oracle. Resolver admin only. */
+  async setOracle(oracle: string, enabled: boolean, adminSigner: Signer): Promise<TransactionResult> {
+    try {
+      await this.invoke('resolver', 'set_oracle', { oracle, enabled }, adminSigner);
+      return { status: 'success' };
+    } catch (err) {
+      return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Whether `address` is a registered result oracle. */
+  async isOracle(address: string): Promise<boolean> {
+    return this.invoke<boolean>('resolver', 'is_oracle', { oracle: address });
+  }
+
+  /** The asset a match is denominated in (fixed by its first stake), or null if nobody has staked. */
+  async getMatchAsset(matchId: string): Promise<string | null> {
+    const asset = await this.invoke<string | undefined>('escrow', 'get_match_asset', { match_id: matchId });
+    return asset ?? null;
+  }
+
   /** Finalize a match's result once the dispute window has closed. Callable by anyone. */
   async finalizeMatch(matchId: string, submitter: Signer): Promise<MatchOutcome> {
     const winner = await this.invoke<string>('resolver', 'finalize', { match_id: matchId }, submitter);
